@@ -17,6 +17,16 @@ type FileLogger struct {
 	maxFileSize   int64
 	prevHour      int
 	isSplitByDate bool
+	msgChan       chan *logMsg
+}
+
+type logMsg struct {
+	level     LogLevel
+	msg       string
+	funcName  string
+	fileName  string
+	timestamp string
+	line      int
 }
 
 //NewFileLog 构造函数
@@ -31,11 +41,13 @@ func NewFileLog(levelStr, fp, fn string, mxfsize int64, issplitbydate bool) *Fil
 		filePath:      fp,
 		maxFileSize:   mxfsize,
 		isSplitByDate: issplitbydate,
+		msgChan:       make(chan *logMsg, 50000),
 	}
 	err = fl.initFile()
 	if err != nil {
 		panic(err)
 	}
+
 	return &fl
 }
 
@@ -57,6 +69,11 @@ func (f *FileLogger) initFile() error {
 	//赋值给全局fileObj
 	f.fileObj = f1
 	f.errFileObj = f2
+
+	//开启3个groutine异步写日志
+	for i := 1; i <= 3; i++ {
+		go f.writeLogBackgroud()
+	}
 	return nil
 
 }
@@ -117,26 +134,58 @@ func (f *FileLogger) enable(level LogLevel) bool {
 
 }
 
+//后台写日志
+func (f *FileLogger) writeLogBackgroud() {
+	// msg := fmt.Sprintf(format, a...)
+	// now := time.Now().Format("2006-01-02 15:04:05")
+
+	// funcName, fileName, lineNo := getInfo(3)
+	for {
+		select {
+		case logTmp := <-f.msgChan:
+			levelStr := getLoggerStrbyLevel(logTmp.level)
+			var err error
+			f.fileObj, err = f.checkFileSplit(f.fileObj)
+			if err != nil {
+				panic(err)
+			}
+			logInfo := fmt.Sprintf("[%s] [%s] [%s:%s:%d] %s\n", logTmp.timestamp, levelStr, logTmp.fileName, logTmp.funcName, logTmp.line, logTmp.msg)
+			fmt.Println(logInfo)
+			fmt.Fprintf(f.fileObj, logInfo)
+			if logTmp.level >= ERROR {
+				f.errFileObj, err = f.checkFileSplit(f.errFileObj)
+				if err != nil {
+					panic(err)
+				}
+				fmt.Fprintf(f.errFileObj, logInfo)
+			}
+		default:
+			time.Sleep(time.Millisecond * 50)
+		}
+	}
+
+}
+
 //将获取的等级日志写入文件
 func (f *FileLogger) consolelog(lv LogLevel, format string, a ...interface{}) {
 	if f.enable(lv) {
 		msg := fmt.Sprintf(format, a...)
 		now := time.Now().Format("2006-01-02 15:04:05")
-		levelStr := getLoggerStrbyLevel(lv)
 		funcName, fileName, lineNo := getInfo(3)
-		var err error
-		f.fileObj, err = f.checkFileSplit(f.fileObj)
-		if err != nil {
-			panic(err)
+		logData := &logMsg{
+			level:     lv,
+			fileName:  fileName,
+			funcName:  funcName,
+			line:      lineNo,
+			msg:       msg,
+			timestamp: now,
 		}
-		fmt.Fprintf(f.fileObj, "[%s] [%s] [%s:%s:%d] %s\n", now, levelStr, fileName, funcName, lineNo, msg)
-		if lv >= ERROR {
-			f.errFileObj, err = f.checkFileSplit(f.errFileObj)
-			if err != nil {
-				panic(err)
-			}
-			fmt.Fprintf(f.errFileObj, "[%s] [%s] [%s:%s:%d] %s\n", now, levelStr, fileName, funcName, lineNo, msg)
+		//防止通道满了，阻塞
+		select {
+		case f.msgChan <- logData:
+		default:
 		}
+
 	}
 
 }
