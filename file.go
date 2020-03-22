@@ -70,10 +70,10 @@ func (f *FileLogger) initFile() error {
 	f.fileObj = f1
 	f.errFileObj = f2
 
-	//开启3个groutine异步写日志
-	for i := 1; i <= 3; i++ {
-		go f.writeLogBackgroud()
-	}
+	//开启1个groutine异步写日志
+	//for i := 1; i <= 5; i++ {
+	go f.writeLogBackgroud()
+	//}
 	return nil
 
 }
